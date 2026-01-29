@@ -1,0 +1,41 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Campaign {
+  id          String         @id @default(uuid())
+  seed        BigInt         @unique
+  authority   String
+  tokenMint   String
+  packPrice   BigInt
+  totalPacks  Int
+  merkleRoot  String
+  status      CampaignStatus @default(PENDING)
+  publicKey   String?
+  createdAt   DateTime       @default(now())
+  confirmedAt DateTime?
+
+  packs Pack[]
+}
+
+model Pack {
+  id          String   @id @default(uuid())
+  campaignId  String
+  index       Int
+  tokenAmount BigInt
+  salt        String
+  tier        String
+  campaign    Campaign @relation(fields: [campaignId], references: [id])
+
+  @@unique([campaignId, index])
+}
+
+enum CampaignStatus {
+  PENDING
+  ACTIVE
+  CLOSED
+}
