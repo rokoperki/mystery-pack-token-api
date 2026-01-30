@@ -26,10 +26,11 @@ export class CampaignsService {
   ) {}
 
   async prepare(dto: PrepareCampaignDto) {
-    const seed = BigInt(Date.now());
+    const seed = BigInt(dto.seed);
 
     const packs = this.generatePacks(dto.totalPacks, dto.tiers);
 
+    // Build merkle tree
     const packData = packs.map((p, i) => ({
       index: i,
       tokenAmount: BigInt(p.tokenAmount),
@@ -37,6 +38,7 @@ export class CampaignsService {
     }));
     const { root } = this.merkle.buildTree(packData);
 
+    // Store campaign
     const campaign = await this.prisma.campaign.create({
       data: {
         seed,
@@ -62,7 +64,6 @@ export class CampaignsService {
       merkleRoot: Array.from(root),
     };
   }
-
   async confirm(id: string, signature: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { id },
@@ -117,6 +118,23 @@ export class CampaignsService {
     };
   }
 
+  async findAll() {
+    const campaigns = await this.prisma.campaign.findMany();
+
+    return campaigns.map((campaign) => ({
+      id: campaign.id,
+      seed: campaign.seed.toString(),
+      authority: campaign.authority,
+      tokenMint: campaign.tokenMint,
+      packPrice: campaign.packPrice.toString(),
+      totalPacks: campaign.totalPacks,
+      merkleRoot: campaign.merkleRoot,
+      status: campaign.status,
+      publicKey: campaign.publicKey,
+    }));
+  }
+
+  // campaigns.service.ts - update getReveal method
   async getReveal(id: string, packIndex: number, walletAddress: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { id },
@@ -136,6 +154,7 @@ export class CampaignsService {
       throw new NotFoundException('Pack not found');
     }
 
+    // Verify ownership on-chain
     const receipt = await this.solana.getReceipt(
       this.programId,
       new PublicKey(
@@ -159,6 +178,7 @@ export class CampaignsService {
       throw new BadRequestException('Already claimed');
     }
 
+    // Rebuild tree and get proof
     const packs = await this.prisma.pack.findMany({
       where: { campaignId: id },
       orderBy: { index: 'asc' },
@@ -177,6 +197,167 @@ export class CampaignsService {
       tokenAmount: pack.tokenAmount.toString(),
       salt: Array.from(Buffer.from(pack.salt, 'hex')),
       proof: proof.map((p) => Array.from(p)),
+      tier: pack.tier, // Include tier
+    };
+  }
+
+  // campaigns.service.ts - add method
+  async closeCampaign(id: string, signature: string) {
+    const campaign = await this.prisma.campaign.findUnique({
+      where: { id },
+    });
+
+    if (!campaign) {
+      throw new NotFoundException('Campaign not found');
+    }
+
+    if (campaign.status === 'CLOSED') {
+      throw new BadRequestException('Campaign already closed');
+    }
+
+    // Verify transaction
+    const isValid = await this.solana.verifyTransaction(signature);
+    if (!isValid) {
+      throw new BadRequestException('Invalid transaction');
+    }
+
+    // Update status in DB
+    await this.prisma.campaign.update({
+      where: { id },
+      data: {
+        status: 'CLOSED',
+      },
+    });
+
+    return { success: true };
+  }
+
+  // campaigns.service.ts
+  async getHistory(id: string) {
+    const campaign = await this.prisma.campaign.findUnique({
+      where: { id },
+      include: {
+        packs: {
+          orderBy: { index: 'asc' },
+        },
+      },
+    });
+
+    if (!campaign) {
+      throw new NotFoundException('Campaign not found');
+    }
+
+    // Fetch on-chain data for each pack
+    const campaignPda = new PublicKey(
+      campaign.publicKey ??
+        (() => {
+          throw new BadRequestException('Campaign public key is null');
+        })(),
+    );
+    const packHistory = await Promise.all(
+      campaign.packs.map(async (pack) => {
+        const receipt = await this.solana.getReceipt(
+          this.programId,
+          campaignPda,
+          pack.index,
+        );
+
+        return {
+          index: pack.index,
+          tier: pack.tier,
+          // Only show amount if claimed (for transparency)
+          tokenAmount: receipt?.isClaimed ? pack.tokenAmount.toString() : null,
+          buyer: receipt?.buyer?.toBase58() || null,
+          isClaimed: receipt?.isClaimed || false,
+          isPurchased: !!receipt,
+        };
+      }),
+    );
+
+    return {
+      campaignId: campaign.id,
+      totalPacks: campaign.totalPacks,
+      packs: packHistory,
+    };
+  }
+
+  // campaigns.service.ts
+  async getAnalytics(id: string) {
+    const campaign = await this.prisma.campaign.findUnique({
+      where: { id },
+      include: {
+        packs: true,
+      },
+    });
+
+    if (!campaign) {
+      throw new NotFoundException('Campaign not found');
+    }
+
+    // Fetch on-chain data
+    const campaignPda = new PublicKey(
+      campaign.publicKey ??
+        (() => {
+          throw new BadRequestException('Campaign public key is null');
+        })(),
+    );
+
+    let packsSold = 0;
+    let packsClaimed = 0;
+    const tierDistribution: Record<
+      string,
+      { total: number; claimed: number; tokens: bigint }
+    > = {};
+
+    // Initialize tier distribution
+    campaign.packs.forEach((pack) => {
+      if (!tierDistribution[pack.tier]) {
+        tierDistribution[pack.tier] = {
+          total: 0,
+          claimed: 0,
+          tokens: BigInt(0),
+        };
+      }
+      tierDistribution[pack.tier].total++;
+    });
+
+    // Check each pack on-chain
+    for (const pack of campaign.packs) {
+      const receipt = await this.solana.getReceipt(
+        this.programId,
+        campaignPda,
+        pack.index,
+      );
+
+      if (receipt) {
+        packsSold++;
+        if (receipt.isClaimed) {
+          packsClaimed++;
+          tierDistribution[pack.tier].claimed++;
+          tierDistribution[pack.tier].tokens += pack.tokenAmount;
+        }
+      }
+    }
+
+    const solCollected = BigInt(packsSold) * campaign.packPrice;
+
+    return {
+      campaignId: campaign.id,
+      overview: {
+        totalPacks: campaign.totalPacks,
+        packsSold,
+        packsClaimed,
+        packsRemaining: campaign.totalPacks - packsSold,
+        solCollected: solCollected.toString(),
+        claimRate:
+          packsSold > 0 ? ((packsClaimed / packsSold) * 100).toFixed(1) : '0',
+      },
+      tierBreakdown: Object.entries(tierDistribution).map(([tier, data]) => ({
+        tier,
+        totalPacks: data.total,
+        claimedPacks: data.claimed,
+        tokensDistributed: data.tokens.toString(),
+      })),
     };
   }
 

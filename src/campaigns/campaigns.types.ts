@@ -16,6 +16,7 @@ const prepareCampaignSchema = z
     totalPacks: z.number().int().min(1).max(10000),
     packPrice: z.number().int().min(1),
     tiers: z.array(tierSchema).min(1).max(10),
+    seed: z.string(), // REQUIRED - frontend must provide
   })
   .refine(
     (data) => {
@@ -37,3 +38,9 @@ const confirmCampaignSchema = z.object({
 });
 
 export class ConfirmCampaignDto extends createZodDto(confirmCampaignSchema) {}
+
+const closeCampaignSchema = z.object({
+  signature: z.string().min(64).max(128),
+});
+
+export class CloseCampaignDto extends createZodDto(closeCampaignSchema) {}

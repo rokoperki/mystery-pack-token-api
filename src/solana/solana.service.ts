@@ -43,8 +43,10 @@ export class SolanaService {
       if (!accountInfo) return null;
 
       const data = accountInfo.data;
-      const buyer = new PublicKey(data.slice(8, 40));
-      const isClaimed = data[72] === 1;
+      const buyer = new PublicKey(data.slice(33, 65));
+
+      console.log(buyer.toBase58());
+      const isClaimed = data[69] === 1;
 
       return { buyer, isClaimed };
     } catch {

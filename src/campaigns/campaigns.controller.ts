@@ -1,7 +1,11 @@
 // src/campaigns/campaigns.controller.ts
 import { Controller, Get, Post, Body, Param, Query } from '@nestjs/common';
 import { CampaignsService } from './campaigns.service';
-import { PrepareCampaignDto, ConfirmCampaignDto } from './campaigns.types';
+import {
+  PrepareCampaignDto,
+  ConfirmCampaignDto,
+  CloseCampaignDto,
+} from './campaigns.types';
 
 @Controller('campaigns')
 export class CampaignsController {
@@ -20,6 +24,29 @@ export class CampaignsController {
   @Get(':id')
   findOne(@Param('id') id: string) {
     return this.campaignsService.findOne(id);
+  }
+
+  // campaigns.controller.ts
+  @Get(':id/history')
+  getHistory(@Param('id') id: string) {
+    return this.campaignsService.getHistory(id);
+  }
+
+  // campaigns.controller.ts
+  @Get(':id/analytics')
+  getAnalytics(@Param('id') id: string) {
+    return this.campaignsService.getAnalytics(id);
+  }
+
+  // campaigns.controller.ts
+  @Post(':id/close')
+  closeCampaign(@Param('id') id: string, @Body() dto: CloseCampaignDto) {
+    return this.campaignsService.closeCampaign(id, dto.signature);
+  }
+
+  @Get('')
+  findAll() {
+    return this.campaignsService.findAll();
   }
 
   @Get(':id/reveal/:packIndex')
