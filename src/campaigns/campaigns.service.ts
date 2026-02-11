@@ -8,7 +8,7 @@ import { MerkleService } from '../merkle/merkle.service';
 import { SolanaService } from '../solana/solana.service';
 import { randomBytes } from 'crypto';
 import { PublicKey } from '@solana/web3.js';
-import { PrepareCampaignDto, Tier } from './campaigns.types';
+import { PrepareCampaignDto, RecordPurchaseDto, Tier } from './campaigns.types';
 
 @Injectable()
 export class CampaignsService {
@@ -134,7 +134,59 @@ export class CampaignsService {
     }));
   }
 
-  // campaigns.service.ts - update getReveal method
+  async recordPurchase(id: string, dto: RecordPurchaseDto) {
+    const campaign = await this.prisma.campaign.findUnique({
+      where: { id },
+    });
+
+    if (!campaign) {
+      throw new NotFoundException('Campaign not found');
+    }
+
+    if (campaign.status !== 'ACTIVE') {
+      throw new BadRequestException('Campaign not active');
+    }
+
+    const campaignPda = new PublicKey(
+      campaign.publicKey ??
+        (() => {
+          throw new BadRequestException('Campaign public key is null');
+        })(),
+    );
+
+    const buyerPubkey = new PublicKey(dto.buyer);
+    const nonce = BigInt(dto.nonce);
+
+    // Verify receipt exists on-chain
+    const receipt = await this.solana.getReceipt(
+      this.programId,
+      campaignPda,
+      buyerPubkey,
+      nonce,
+    );
+
+    if (!receipt) {
+      throw new BadRequestException('Receipt not found on-chain');
+    }
+
+    if (receipt.packIndex !== dto.packIndex) {
+      throw new BadRequestException('Pack index mismatch');
+    }
+
+    // Store in DB
+    const purchase = await this.prisma.purchase.create({
+      data: {
+        campaignId: id,
+        buyer: dto.buyer,
+        nonce,
+        packIndex: dto.packIndex,
+        signature: dto.signature,
+      },
+    });
+
+    return { success: true, purchaseId: purchase.id };
+  }
+
   async getReveal(id: string, packIndex: number, walletAddress: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { id },
@@ -154,24 +206,32 @@ export class CampaignsService {
       throw new NotFoundException('Pack not found');
     }
 
-    // Verify ownership on-chain
-    const receipt = await this.solana.getReceipt(
-      this.programId,
-      new PublicKey(
-        campaign.publicKey ??
-          (() => {
-            throw new BadRequestException('Campaign public key is null');
-          })(),
-      ),
-      packIndex,
-    );
+    // Look up purchase from DB to get nonce
+    const purchase = await this.prisma.purchase.findFirst({
+      where: { campaignId: id, buyer: walletAddress, packIndex },
+    });
 
-    if (!receipt) {
+    if (!purchase) {
       throw new BadRequestException('Pack not purchased');
     }
 
-    if (receipt.buyer.toBase58() !== walletAddress) {
-      throw new BadRequestException('Not pack owner');
+    const campaignPda = new PublicKey(
+      campaign.publicKey ??
+        (() => {
+          throw new BadRequestException('Campaign public key is null');
+        })(),
+    );
+
+    // Verify ownership on-chain using buyer + nonce
+    const receipt = await this.solana.getReceipt(
+      this.programId,
+      campaignPda,
+      new PublicKey(walletAddress),
+      purchase.nonce,
+    );
+
+    if (!receipt) {
+      throw new BadRequestException('Receipt not found on-chain');
     }
 
     if (receipt.isClaimed) {
@@ -197,7 +257,7 @@ export class CampaignsService {
       tokenAmount: pack.tokenAmount.toString(),
       salt: Array.from(Buffer.from(pack.salt, 'hex')),
       proof: proof.map((p) => Array.from(p)),
-      tier: pack.tier, // Include tier
+      tier: pack.tier,
     };
   }
 
@@ -232,14 +292,12 @@ export class CampaignsService {
     return { success: true };
   }
 
-  // campaigns.service.ts
   async getHistory(id: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { id },
       include: {
-        packs: {
-          orderBy: { index: 'asc' },
-        },
+        packs: { orderBy: { index: 'asc' } },
+        purchases: true,
       },
     });
 
@@ -247,29 +305,47 @@ export class CampaignsService {
       throw new NotFoundException('Campaign not found');
     }
 
-    // Fetch on-chain data for each pack
     const campaignPda = new PublicKey(
       campaign.publicKey ??
         (() => {
           throw new BadRequestException('Campaign public key is null');
         })(),
     );
+
+    // Build a map of packIndex -> purchase for quick lookup
+    const purchaseByPackIndex = new Map(
+      campaign.purchases.map((p) => [p.packIndex, p]),
+    );
+
     const packHistory = await Promise.all(
       campaign.packs.map(async (pack) => {
+        const purchase = purchaseByPackIndex.get(pack.index);
+        if (!purchase) {
+          return {
+            index: pack.index,
+            tier: pack.tier,
+            tokenAmount: null,
+            buyer: null,
+            isClaimed: false,
+            isPurchased: false,
+          };
+        }
+
+        // Verify claim status on-chain
         const receipt = await this.solana.getReceipt(
           this.programId,
           campaignPda,
-          pack.index,
+          new PublicKey(purchase.buyer),
+          purchase.nonce,
         );
 
         return {
           index: pack.index,
           tier: pack.tier,
-          // Only show amount if claimed (for transparency)
           tokenAmount: receipt?.isClaimed ? pack.tokenAmount.toString() : null,
-          buyer: receipt?.buyer?.toBase58() || null,
+          buyer: purchase.buyer,
           isClaimed: receipt?.isClaimed || false,
-          isPurchased: !!receipt,
+          isPurchased: true,
         };
       }),
     );
@@ -281,12 +357,12 @@ export class CampaignsService {
     };
   }
 
-  // campaigns.service.ts
   async getAnalytics(id: string) {
     const campaign = await this.prisma.campaign.findUnique({
       where: { id },
       include: {
         packs: true,
+        purchases: true,
       },
     });
 
@@ -294,7 +370,6 @@ export class CampaignsService {
       throw new NotFoundException('Campaign not found');
     }
 
-    // Fetch on-chain data
     const campaignPda = new PublicKey(
       campaign.publicKey ??
         (() => {
@@ -302,8 +377,6 @@ export class CampaignsService {
         })(),
     );
 
-    let packsSold = 0;
-    let packsClaimed = 0;
     const tierDistribution: Record<
       string,
       { total: number; claimed: number; tokens: bigint }
@@ -321,18 +394,25 @@ export class CampaignsService {
       tierDistribution[pack.tier].total++;
     });
 
-    // Check each pack on-chain
-    for (const pack of campaign.packs) {
+    // Build packIndex -> pack lookup
+    const packByIndex = new Map(campaign.packs.map((p) => [p.index, p]));
+
+    let packsClaimed = 0;
+    const packsSold = campaign.purchases.length;
+
+    // Check claim status for each purchase
+    for (const purchase of campaign.purchases) {
       const receipt = await this.solana.getReceipt(
         this.programId,
         campaignPda,
-        pack.index,
+        new PublicKey(purchase.buyer),
+        purchase.nonce,
       );
 
-      if (receipt) {
-        packsSold++;
-        if (receipt.isClaimed) {
-          packsClaimed++;
+      if (receipt?.isClaimed) {
+        packsClaimed++;
+        const pack = packByIndex.get(purchase.packIndex);
+        if (pack) {
           tierDistribution[pack.tier].claimed++;
           tierDistribution[pack.tier].tokens += pack.tokenAmount;
         }

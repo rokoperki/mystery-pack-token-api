@@ -13,10 +13,10 @@ const prepareCampaignSchema = z
   .object({
     authority: z.string().min(32),
     tokenMint: z.string().min(32),
-    totalPacks: z.number().int().min(1).max(10000),
+    totalPacks: z.number().int().min(1).max(99),
     packPrice: z.number().int().min(1),
     tiers: z.array(tierSchema).min(1).max(10),
-    seed: z.string(), // REQUIRED - frontend must provide
+    seed: z.string(),
   })
   .refine(
     (data) => {
@@ -44,3 +44,12 @@ const closeCampaignSchema = z.object({
 });
 
 export class CloseCampaignDto extends createZodDto(closeCampaignSchema) {}
+
+const recordPurchaseSchema = z.object({
+  buyer: z.string().min(32),
+  nonce: z.string(),
+  packIndex: z.number().int().min(0),
+  signature: z.string().min(64).max(128),
+});
+
+export class RecordPurchaseDto extends createZodDto(recordPurchaseSchema) {}

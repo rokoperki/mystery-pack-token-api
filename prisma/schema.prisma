@@ -19,7 +19,8 @@ model Campaign {
   createdAt   DateTime       @default(now())
   confirmedAt DateTime?
 
-  packs Pack[]
+  packs     Pack[]
+  purchases Purchase[]
 }
 
 model Pack {
@@ -32,6 +33,19 @@ model Pack {
   campaign    Campaign @relation(fields: [campaignId], references: [id])
 
   @@unique([campaignId, index])
+}
+
+model Purchase {
+  id         String   @id @default(uuid())
+  campaignId String
+  buyer      String
+  nonce      BigInt
+  packIndex  Int
+  signature  String
+  createdAt  DateTime @default(now())
+  campaign   Campaign @relation(fields: [campaignId], references: [id])
+
+  @@unique([campaignId, buyer, nonce])
 }
 
 enum CampaignStatus {

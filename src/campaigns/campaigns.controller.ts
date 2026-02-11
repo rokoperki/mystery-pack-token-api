@@ -5,6 +5,7 @@ import {
   PrepareCampaignDto,
   ConfirmCampaignDto,
   CloseCampaignDto,
+  RecordPurchaseDto,
 } from './campaigns.types';
 
 @Controller('campaigns')
@@ -42,6 +43,11 @@ export class CampaignsController {
   @Post(':id/close')
   closeCampaign(@Param('id') id: string, @Body() dto: CloseCampaignDto) {
     return this.campaignsService.closeCampaign(id, dto.signature);
+  }
+
+  @Post(':id/purchase')
+  recordPurchase(@Param('id') id: string, @Body() dto: RecordPurchaseDto) {
+    return this.campaignsService.recordPurchase(id, dto);
   }
 
   @Get('')

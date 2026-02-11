@@ -27,28 +27,40 @@ export class SolanaService {
   async getReceipt(
     programId: PublicKey,
     campaignPda: PublicKey,
-    packIndex: number,
-  ): Promise<{ buyer: PublicKey; isClaimed: boolean } | null> {
+    buyer: PublicKey,
+    nonce: bigint,
+  ): Promise<{
+    buyer: PublicKey;
+    packIndex: number;
+    isClaimed: boolean;
+    nonce: bigint;
+  } | null> {
     const [receiptPda] = PublicKey.findProgramAddressSync(
       [
         Buffer.from('receipt'),
         campaignPda.toBuffer(),
-        Buffer.from(new Uint32Array([packIndex]).buffer),
+        buyer.toBuffer(),
+        this.bigintToLeBytes(nonce),
       ],
       programId,
     );
 
     try {
-      const accountInfo = await this.connection.getAccountInfo(receiptPda);
+      const accountInfo = await this.connection.getAccountInfo(receiptPda, {
+        commitment: 'confirmed',
+      });
       if (!accountInfo) return null;
 
       const data = accountInfo.data;
-      const buyer = new PublicKey(data.slice(33, 65));
-
-      console.log(buyer.toBase58());
+      // Receipt layout (1-byte discriminator):
+      // [0]: discriminator, [1..33]: campaign, [33..65]: buyer,
+      // [65..69]: pack_index (u32 LE), [69]: is_claimed, [70..78]: nonce (u64 LE)
+      const receiptBuyer = new PublicKey(data.slice(33, 65));
+      const packIndex = data.readUInt32LE(65);
       const isClaimed = data[69] === 1;
+      const receiptNonce = data.readBigUInt64LE(70);
 
-      return { buyer, isClaimed };
+      return { buyer: receiptBuyer, packIndex, isClaimed, nonce: receiptNonce };
     } catch {
       return null;
     }
