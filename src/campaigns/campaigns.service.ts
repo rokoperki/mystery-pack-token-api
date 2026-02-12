@@ -30,7 +30,6 @@ export class CampaignsService {
 
     const packs = this.generatePacks(dto.totalPacks, dto.tiers);
 
-    // Build merkle tree
     const packData = packs.map((p, i) => ({
       index: i,
       tokenAmount: BigInt(p.tokenAmount),
@@ -38,7 +37,6 @@ export class CampaignsService {
     }));
     const { root } = this.merkle.buildTree(packData);
 
-    // Store campaign
     const campaign = await this.prisma.campaign.create({
       data: {
         seed,
@@ -58,10 +56,21 @@ export class CampaignsService {
       },
     });
 
+    const transaction = await this.solana.buildInitializeCampaignTx(
+      this.programId,
+      new PublicKey(dto.authority),
+      new PublicKey(dto.tokenMint),
+      seed,
+      root,
+      BigInt(dto.packPrice),
+      dto.totalPacks,
+    );
+
     return {
       id: campaign.id,
       seed: seed.toString(),
       merkleRoot: Array.from(root),
+      transaction,
     };
   }
   async confirm(id: string, signature: string) {
@@ -157,7 +166,6 @@ export class CampaignsService {
     const buyerPubkey = new PublicKey(dto.buyer);
     const nonce = BigInt(dto.nonce);
 
-    // Verify receipt exists on-chain
     const receipt = await this.solana.getReceipt(
       this.programId,
       campaignPda,
@@ -173,7 +181,6 @@ export class CampaignsService {
       throw new BadRequestException('Pack index mismatch');
     }
 
-    // Store in DB
     const purchase = await this.prisma.purchase.create({
       data: {
         campaignId: id,

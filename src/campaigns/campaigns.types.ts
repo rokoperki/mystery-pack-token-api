@@ -13,8 +13,8 @@ const prepareCampaignSchema = z
   .object({
     authority: z.string().min(32),
     tokenMint: z.string().min(32),
-    totalPacks: z.number().int().min(1).max(99),
-    packPrice: z.number().int().min(1),
+    totalPacks: z.number().int().min(1).max(100),
+    packPrice: z.number().int().min(1).max(1_000_000_000),
     tiers: z.array(tierSchema).min(1).max(10),
     seed: z.string(),
   })

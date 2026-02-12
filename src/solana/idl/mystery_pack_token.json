@@ -350,6 +350,11 @@
           "signer": true
         },
         {
+          "name": "fee_recipient",
+          "writable": true,
+          "signer": true
+        },
+        {
           "name": "campaign",
           "writable": true,
           "pda": {
@@ -729,6 +734,11 @@
       "code": 6015,
       "name": "NoPacksAvailable",
       "msg": "No packs are available for purchase"
+    },
+    {
+      "code": 6016,
+      "name": "InvalidFeeRecipient",
+      "msg": "Invalid fee recipient"
     }
   ],
   "types": [
